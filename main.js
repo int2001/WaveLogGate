@@ -102,12 +102,13 @@ function createAdvancedWindow (mainWindow) {
 }
 
 ipcMain.on("set_config", async (event,arg) => {
-	// event.returnValue="aha";
- 	defaultcfg=arg;
-	storage.set('basic', defaultcfg, function(e) {
+    	const storedcfg = storage.getSync('basic'); // Einmalig die gespeicherte Konfiguration holen
+    	Object.assign(storedcfg, arg); // storedcfg mit den neuen Werten aktualisieren
+	storage.set('basic', storedcfg, function(e) {	// Storing
 		if (e) throw e;
 	});
-	event.returnValue=defaultcfg;
+
+	event.returnValue=storedcfg;
 });
 
 ipcMain.on("resize", async (event,arg) => {
@@ -124,11 +125,10 @@ ipcMain.on("get_config", async (event, arg) => {
     
     for (const key in storedcfg) {
         // Überprüfen, ob der gespeicherte Wert kein leerer String und nicht undefined ist
-        if (storedcfg[key] !== "" && storedcfg[key] !== undefined) {
+        if ((storedcfg[key] !== "") || (storedcfg[key] !== undefined)) {
             defaultcfg[key] = storedcfg[key];
         }
     }
-    
     event.returnValue = defaultcfg;
 });
 

@@ -3,6 +3,7 @@
 const { contextBridge, ipcRenderer } = require('electron/renderer')
 
 window.TX_API = {
+  onUpdateCfg: (callback) => ipcRenderer.on('updateCfg', (_event, value) => callback(value)),
   onUpdateTX: (callback) => ipcRenderer.on('updateTX', (_event, value) => callback(value)),
   onUpdateMsg: (callback) => ipcRenderer.on('updateMsg', (_event, value) => callback(value))
 };
