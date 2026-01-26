@@ -99,7 +99,7 @@ function isNewerVersion(v1, v2) {
 }
 
 // Check for updates via GitHub API
-async function checkForUpdates() {
+function checkForUpdates() {
 	if (!app.isPackaged) {
 		console.log('Skipping update check (development mode)');
 		return;

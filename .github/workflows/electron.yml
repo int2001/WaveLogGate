@@ -12,145 +12,29 @@ on:
         default: false
 
 jobs:
-  build_on_linux:
-    runs-on: ubuntu-latest
+  build_and_publish:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
+
     - name: set dynamic repository
       run: |
-        REPONAME=$(echo "$GITHUB_REPOSITORY" | cut -d'/' -f2)
-        REPONAME=${REPONAME//-/_}
-        node -e "let p=require('./package.json'); p.repository={type:'git',url:'https://github.com/${GITHUB_REPOSITORY}.git'}; require('fs').writeFileSync('./package.json', JSON.stringify(p, null, 2));"
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          $parts = "$env:GITHUB_REPOSITORY" -split '/'
+          $repoUrl = "https://github.com/$env:GITHUB_REPOSITORY.git"
+          node -e "let p=require('./package.json'); p.repository={type:'git',url:'$repoUrl'}; require('fs').writeFileSync('./package.json', JSON.stringify(p, null, 2));"
+        else
+          node -e "let p=require('./package.json'); p.repository={type:'git',url:'https://github.com/${GITHUB_REPOSITORY}.git'}; require('fs').writeFileSync('./package.json', JSON.stringify(p, null, 2));"
+        fi
+      shell: bash
+
     - name: install dependencies
       run: npm install
+
     - name: build and publish
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: npx electron-forge publish --platform linux --arch=x64
-    - name: build and publish armhf
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: npx electron-forge publish --platform linux --arch=armv7l
-    - name: build and publish arm64
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: npx electron-forge publish --platform linux --arch=arm64
-
-  build_mac:
-    runs-on: macos-14
-    steps:
-    - uses: actions/checkout@v4
-    - name: set dynamic repository
-      run: |
-        REPONAME=$(echo "$GITHUB_REPOSITORY" | cut -d'/' -f2)
-        REPONAME=${REPONAME//-/_}
-        node -e "let p=require('./package.json'); p.repository={type:'git',url:'https://github.com/${GITHUB_REPOSITORY}.git'}; require('fs').writeFileSync('./package.json', JSON.stringify(p, null, 2));"
-    - name: setup python
-      uses: actions/setup-python@v5
-      with:
-        python-version: 3.12
-    - name: setup appdmg
-      run: |
-        python3 -m pip install setuptools
-        npm install -g appdmg@0.6.6
-    - name: install dependencies
-      run: npm install
-    - name: build arm64
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: npx electron-forge make --arch=arm64
-    - name: build x64
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: npx electron-forge make --arch=x64
-    - name: upload mac artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: mac-artifacts
-        path: out/make
-
-  build_win:
-    runs-on: windows-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: set dynamic repository
-      shell: pwsh
-      run: |
-        $parts = "$env:GITHUB_REPOSITORY" -split '/'
-        $owner = $parts[0]
-        $repo = $parts[1]
-        $repoUrl = "https://github.com/$env:GITHUB_REPOSITORY.git"
-        $js = @"
-        let p=require('./package.json');
-        p.repository={type:'git',url:'$repoUrl'};
-        p.build=p.build||{};
-        p.build.publish=[{provider:'github',owner:'$owner',repo:'$repo'}];
-        p.build.win=p.build.win||{};
-        p.build.win.target='squirrel';
-        require('fs').writeFileSync('./package.json', JSON.stringify(p, null, 2));
-        "@
-        node -e $js
-    - name: install dependencies
-      run: npm install
-    - name: build
-      run: npx electron-forge make
-    - name: upload win artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: win-artifacts
-        path: out/make
-
-  publish_release:
-    runs-on: macos-latest
-    needs: [build_mac, build_win]
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: download mac artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: mac-artifacts
-        path: out/make
-
-    - name: download win artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: win-artifacts
-        path: out/make
-
-    - name: set dynamic repository
-      run: |
-        REPONAME=$(echo "$GITHUB_REPOSITORY" | cut -d'/' -f2)
-        REPONAME=${REPONAME//-/_}
-        node -e "let p=require('./package.json'); p.repository={type:'git',url:'https://github.com/${GITHUB_REPOSITORY}.git'}; require('fs').writeFileSync('./package.json', JSON.stringify(p, null, 2));"
-
-    - name: generate update yml files
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        node generate-update-yml.js
-        # No need for Windows latest.yml - using simple update checker instead
-
-    - name: create release and upload all artifacts
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        PRERELEASE: ${{ inputs.prerelease || 'false' }}
-      run: |
-        VERSION=$(node -p "require('./package.json').version")
-        echo "Creating release v$VERSION"
-
-        # Find all files to upload
-        FILES=""
-        for f in out/make/**/*.*; do
-          if [ -f "$f" ]; then
-            FILES="$FILES $f"
-          fi
-        done
-
-        echo "Files: $FILES"
-
-        # Try to create release (fails if exists, which is fine)
-        gh release create "v$VERSION" --draft $FILES || true
-
-        # Ensure all files are uploaded (handles both new and existing releases)
-        find out/make -type f \( -name "*.zip" -o -name "*.dmg" -o -name "*.exe" -o -name "*.nupkg" -o -name "RELEASES" -o -name "latest*.yml" \) -exec gh release upload "v$VERSION" {} --clobber --repo ${{ github.repository }} \;
+      run: npx electron-forge publish
