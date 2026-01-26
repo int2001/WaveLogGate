@@ -20,16 +20,17 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: set dynamic repository
+    - name: set dynamic repository (unix)
+      if: runner.os != 'Windows'
       run: |
-        if [ "$RUNNER_OS" == "Windows" ]; then
-          $parts = "$env:GITHUB_REPOSITORY" -split '/'
-          $repoUrl = "https://github.com/$env:GITHUB_REPOSITORY.git"
-          node -e "let p=require('./package.json'); p.repository={type:'git',url:'$repoUrl'}; require('fs').writeFileSync('./package.json', JSON.stringify(p, null, 2));"
-        else
-          node -e "let p=require('./package.json'); p.repository={type:'git',url:'https://github.com/${GITHUB_REPOSITORY}.git'}; require('fs').writeFileSync('./package.json', JSON.stringify(p, null, 2));"
-        fi
-      shell: bash
+        node -e "let p=require('./package.json'); p.repository={type:'git',url:'https://github.com/${GITHUB_REPOSITORY}.git'}; require('fs').writeFileSync('./package.json', JSON.stringify(p, null, 2));"
+
+    - name: set dynamic repository (windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $repoUrl = "https://github.com/$env:GITHUB_REPOSITORY.git"
+        node -e "let p=require('./package.json'); p.repository={type:'git',url:'$repoUrl'}; require('fs').writeFileSync('./package.json', JSON.stringify(p, null, 2));"
 
     - name: install dependencies
       run: npm install
