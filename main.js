@@ -150,17 +150,23 @@ function checkForUpdates() {
 // Show notification about available update
 function showUpdateNotification(version, releaseUrl) {
 	if (Notification.isSupported()) {
+		// Store reference to prevent garbage collection
 		const notification = new Notification({
 			title: 'WaveLogGate Update Available',
 			body: `Version ${version} is available. Click to download.`,
-			icon: path.join(__dirname, 'icon.png')
+			icon: path.join(__dirname, 'icon.png'),
+			silent: false
 		});
 
-		notification.on('click', () => {
+		notification.once('click', () => {
+			console.log('Notification clicked, opening:', releaseUrl);
 			shell.openExternal(releaseUrl);
 		});
 
 		notification.show();
+	} else {
+		// Fallback: log to console
+		console.log(`Update available: ${version} - Download from: ${releaseUrl}`);
 	}
 }
 
