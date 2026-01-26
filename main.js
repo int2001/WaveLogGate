@@ -149,8 +149,27 @@ function checkForUpdates() {
 
 // Show notification about available update
 function showUpdateNotification(version, releaseUrl) {
+	// On Windows, use dialog because notification clicks don't work reliably
+	if (process.platform === 'win32') {
+		dialog.showMessageBox({
+			type: 'info',
+			title: 'WaveLogGate Update Available',
+			message: `A new version is available!`,
+			detail: `Version ${version} is ready to download. You are currently running v${app.getVersion()}.`,
+			buttons: ['Go to Download', 'Later'],
+			defaultId: 0,
+			cancelId: 1
+		}).then(result => {
+			if (result.response === 0) {
+				console.log('Opening download page:', releaseUrl);
+				shell.openExternal(releaseUrl);
+			}
+		});
+		return;
+	}
+
+	// On macOS/Linux, use native notification (click works on macOS)
 	if (Notification.isSupported()) {
-		// Store reference to prevent garbage collection
 		const notification = new Notification({
 			title: 'WaveLogGate Update Available',
 			body: `Version ${version} is available. Click to download.`,
