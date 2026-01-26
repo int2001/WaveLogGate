@@ -1,7 +1,6 @@
-const {app, BrowserWindow, globalShortcut, Notification, powerSaveBlocker, dialog } = require('electron/main');
+const {app, BrowserWindow, globalShortcut, Notification, powerSaveBlocker, dialog, shell } = require('electron/main');
 const path = require('node:path');
 const {ipcMain} = require('electron')
-const { autoUpdater } = require('electron-updater');
 const http = require('http');
 const https = require('https');
 const xml = require("xml2js");
@@ -66,122 +65,102 @@ let defaultcfg = {
 const storage = require('electron-json-storage');
 
 // =============================================================================
-// Auto-Updater Configuration
+// Simple Update Checker
 // =============================================================================
 
-// Configure auto updater settings
-autoUpdater.autoDownload = true;  // Download updates automatically
-autoUpdater.autoInstallOnAppQuit = true;  // Install on app quit
-
-// Read update configuration from package.json and set feed URL explicitly
-try {
-	const pkg = require('./package.json');
-	if (pkg.build && pkg.build.publish && pkg.build.publish[0]) {
-		const publisher = pkg.build.publish[0];
-		if (publisher.provider === 'github' && publisher.owner && publisher.repo) {
-			// For Windows Squirrel, construct the update URL explicitly
-			const feedURL = `https://github.com/${publisher.owner}/${publisher.repo}/releases/download`;
-			autoUpdater.setFeedURL({
-				provider: 'github',
-				owner: publisher.owner,
-				repo: publisher.repo
-			});
-			fs.appendFileSync(path.join(app.getPath('userData'), 'update.log'), `Update feed configured: ${feedURL}\n`);
-		}
-	}
-} catch (e) {
-	fs.appendFileSync(path.join(app.getPath('userData'), 'update.log'), `Failed to configure feed: ${e}\n`);
-}
-
-// Auto-updater event handlers
-autoUpdater.on('checking-for-update', () => {
-	const logMsg = 'Checking for update...\n';
-	console.log(logMsg);
-	fs.appendFileSync(path.join(app.getPath('userData'), 'update.log'), logMsg);
-});
-
-autoUpdater.on('update-available', (info) => {
-	const logMsg = `Update available: ${info.version}\n`;
-	console.log(logMsg);
-	fs.appendFileSync(path.join(app.getPath('userData'), 'update.log'), logMsg);
-	// Notify user that update is downloading
-	if (Notification.isSupported()) {
-		new Notification({
-			title: 'WaveLogGate Update',
-			body: `Version ${info.version} is available. Downloading in background...`
-		}).show();
-	}
-});
-
-autoUpdater.on('update-not-available', (info) => {
-	const logMsg = `No update available (current version: ${app.getVersion()})\n`;
-	console.log(logMsg);
-	fs.appendFileSync(path.join(app.getPath('userData'), 'update.log'), logMsg);
-});
-
-autoUpdater.on('error', (err) => {
-	const logMsg = `Update error: ${err}\n`;
-	console.error('Update error:', err);
-	fs.appendFileSync(path.join(app.getPath('userData'), 'update.log'), logMsg);
-});
-
-autoUpdater.on('download-progress', (progress) => {
-	if (progress.percent % 20 === 0 || progress.percent === 100) {
-		console.log(`Download progress: ${Math.floor(progress.percent)}%`);
-	}
-});
-
-autoUpdater.on('update-downloaded', (info) => {
-	console.log('Update downloaded:', info.version);
-
-	// Show dialog to restart and install
-	dialog.showMessageBox(s_mainWindow, {
-		type: 'info',
-		title: 'Update Ready',
-		message: `WaveLogGate ${info.version} has been downloaded.`,
-		detail: 'Would you like to restart and install the update now?',
-		buttons: ['Restart Now', 'Later'],
-		defaultId: 0
-	}).then((result) => {
-		if (result.response === 0) {
-			// In mock mode, use app.relaunch() instead of autoUpdater.quitAndInstall()
-			if (process.env.WLGATE_MOCK_UPDATE === 'true') {
-				console.log('Mock update mode: Restarting app...');
-				app.relaunch();
-				app.quit();
-			} else {
-				autoUpdater.quitAndInstall();
+// Get repository info from package.json
+function getRepoInfo() {
+	try {
+		const pkg = require('./package.json');
+		if (pkg.repository && pkg.repository.url) {
+			const match = pkg.repository.url.match(/github\.com[/:]([^/]+)\/([^/]+)/);
+			if (match) {
+				return { owner: match[1], repo: match[2].replace('.git', '') };
 			}
 		}
-	});
-});
+	} catch (e) {
+		console.log('Could not read repository info:', e.message);
+	}
+	// Fallback to defaults
+	return { owner: 'wavelog', repo: 'WaveLogGate' };
+}
 
-// Function to check for updates manually
-function checkForUpdates() {
-	// Mock mode for testing update UI flow
-	const mockUpdate = process.env.WLGATE_MOCK_UPDATE === 'true';
+// Compare two version strings (returns true if v2 > v1)
+function isNewerVersion(v1, v2) {
+	const parts1 = v1.split('.').map(Number);
+	const parts2 = v2.split('.').map(Number);
+	for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+		const p1 = parts1[i] || 0;
+		const p2 = parts2[i] || 0;
+		if (p2 > p1) return true;
+		if (p2 < p1) return false;
+	}
+	return false;
+}
 
-	if (mockUpdate) {
-		console.log('Mock update mode: Simulating update available...');
-		// Simulate update available event
-		autoUpdater.emit('update-available', { version: '2.0.0' });
-
-		// Simulate download progress after a delay
-		setTimeout(() => {
-			console.log('Mock update mode: Simulating download...');
-			autoUpdater.emit('download-progress', { percent: 50, transferred: 1000000, total: 2000000 });
-		}, 2000);
-
-		// Simulate download complete after another delay
-		setTimeout(() => {
-			console.log('Mock update mode: Simulating download complete');
-			autoUpdater.emit('update-downloaded', { version: '2.0.0' });
-		}, 5000);
-	} else if (app.isPackaged) {
-		autoUpdater.checkForUpdates();
-	} else {
+// Check for updates via GitHub API
+async function checkForUpdates() {
+	if (!app.isPackaged) {
 		console.log('Skipping update check (development mode)');
-		console.log('To test update UI, set WLGATE_MOCK_UPDATE=true environment variable');
+		return;
+	}
+
+	const repoInfo = getRepoInfo();
+	const currentVersion = app.getVersion();
+
+	console.log(`Checking for updates (current: ${currentVersion})...`);
+
+	const options = {
+		hostname: 'api.github.com',
+		path: `/repos/${repoInfo.owner}/${repoInfo.repo}/releases/latest`,
+		headers: {
+			'User-Agent': 'WaveLogGate'
+		}
+	};
+
+	https.get(options, (res) => {
+		let data = '';
+
+		res.on('data', (chunk) => {
+			data += chunk;
+		});
+
+		res.on('end', () => {
+			try {
+				const release = JSON.parse(data);
+				const latestVersion = release.tag_name.replace(/^v/, '');
+
+				console.log(`Latest version: ${latestVersion}`);
+
+				if (isNewerVersion(currentVersion, latestVersion)) {
+					console.log(`Update available: ${latestVersion}`);
+					showUpdateNotification(latestVersion, release.html_url);
+				} else {
+					console.log('Already up to date');
+				}
+			} catch (e) {
+				console.error('Error parsing release info:', e.message);
+			}
+		});
+	}).on('error', (err) => {
+		console.error('Error checking for updates:', err.message);
+	});
+}
+
+// Show notification about available update
+function showUpdateNotification(version, releaseUrl) {
+	if (Notification.isSupported()) {
+		const notification = new Notification({
+			title: 'WaveLogGate Update Available',
+			body: `Version ${version} is available. Click to download.`,
+			icon: path.join(__dirname, 'icon.png')
+		});
+
+		notification.on('click', () => {
+			shell.openExternal(releaseUrl);
+		});
+
+		notification.show();
 	}
 }
 

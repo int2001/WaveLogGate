@@ -129,7 +129,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         node generate-update-yml.js
-        node generate-windows-yml.js
+        # No need for Windows latest.yml - using simple update checker instead
 
     - name: create release and upload all artifacts
       env:
