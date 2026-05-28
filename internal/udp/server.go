@@ -86,7 +86,16 @@ func (s *Server) handleDatagram(data string) {
 	var fields map[string]string
 	var err error
 
-	if strings.Contains(data, "xml") {
+	trimmed := strings.TrimSpace(data)
+	isXML := strings.HasPrefix(trimmed, "<?xml") || strings.HasPrefix(trimmed, "<contactinfo")
+
+	if isXML {
+		// Filter out non-contactinfo N1MM messages (RadioInfo, contactdelete, etc.)
+		root := adif.DetectXMLRoot(data)
+		if root != "contactinfo" {
+			debug.Log("[UDP] ignoring non-contact XML message: <%s>", root)
+			return
+		}
 		debug.Log("[UDP] detected format: XML (FLDigi/N1MM)")
 		fields, err = adif.ParseXML(data)
 		if err != nil {

@@ -39,6 +39,8 @@ var tsFormats = []string{
 func parseTimestamp(ts string) time.Time {
 	// Force UTC by appending Z if not present.
 	s := strings.TrimSpace(ts)
+	// N1MM may emit timestamps with a space before a colon (e.g. "16 :43:38").
+	s = strings.ReplaceAll(s, " :", ":")
 	for _, f := range tsFormats {
 		if t, err := time.Parse(f, s); err == nil {
 			return t.UTC()
@@ -63,6 +65,21 @@ func hzToMHz(hzStr string, n1mm bool) string {
 	return fmt.Sprintf("%.6f", mhz)
 }
 
+// DetectXMLRoot returns the lowercase root element name of an XML document,
+// skipping the XML declaration. Returns "" if no element is found.
+func DetectXMLRoot(data string) string {
+	dec := xml.NewDecoder(strings.NewReader(data))
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return ""
+		}
+		if se, ok := tok.(xml.StartElement); ok {
+			return strings.ToLower(se.Name.Local)
+		}
+	}
+}
+
 // ParseXML decodes a FLDigi / N1MM Logger+ <contactinfo> XML string into a normalised ADIF field map.
 func ParseXML(data string) (map[string]string, error) {
 	var ci ContactInfo
@@ -80,10 +97,7 @@ func ParseXML(data string) (map[string]string, error) {
 	date := t.Format("20060102")
 	timeOn := t.Format("150405")
 
-	mode := ci.Mode
-	if mode == "USB" || mode == "LSB" {
-		mode = "SSB"
-	}
+	mode := normalizeMode(ci.Mode)
 
 	freq := hzToMHz(ci.TxFreq, isN1MM)
 	freqRx := hzToMHz(ci.RxFreq, isN1MM)
@@ -103,12 +117,27 @@ func ParseXML(data string) (map[string]string, error) {
 		"FREQ":             freq,
 		"FREQ_RX":          freqRx,
 		"OPERATOR":         ci.Operator,
-		"COMMENT":          ci.Comment,
-		"TX_PWR":           ci.Power,
 		"MYCALL":           ci.MyCall,
 		"GRIDSQUARE":       ci.GridSquare,
 		"STATION_CALLSIGN": ci.MyCall,
 		"BAND":             band,
+	}
+
+	// N1MM's power field = received power from the other station, not TX power.
+	// Map to comment for N1MM, TX_PWR for FLDigi.
+	if ci.Power != "" {
+		if isN1MM {
+			pwrComment := "[RCVD PWR: " + ci.Power + "]"
+			if ci.Comment != "" {
+				fields["COMMENT"] = ci.Comment + " " + pwrComment
+			} else {
+				fields["COMMENT"] = pwrComment
+			}
+		} else {
+			fields["TX_PWR"] = ci.Power
+		}
+	} else {
+		fields["COMMENT"] = ci.Comment
 	}
 
 	// Serial numbers and contest ID are only meaningful in contest operation.
@@ -128,4 +157,19 @@ func ParseXML(data string) (map[string]string, error) {
 	}
 
 	return fields, nil
+}
+
+// n1mmModeMap normalises N1MM-specific mode names to ADIF-standard equivalents.
+var n1mmModeMap = map[string]string{
+	"USB":    "SSB",
+	"LSB":    "SSB",
+	"FMHELL": "HELL",
+	"HELL80": "HELL",
+}
+
+func normalizeMode(mode string) string {
+	if m, ok := n1mmModeMap[mode]; ok {
+		return m
+	}
+	return mode
 }
